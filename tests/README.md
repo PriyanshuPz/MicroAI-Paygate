@@ -9,6 +9,14 @@ This directory contains End-to-End (E2E) tests for the MicroAI Paygate system.
 
 ## Running E2E Tests
 
+The E2E tests require the Gateway and Verifier services to be running. We have provided a helper script to automate this.
+
+```bash
+bun run test:e2e
+```
+
+Or manually:
+
 1. Start the stack:
    ```bash
    bun run stack

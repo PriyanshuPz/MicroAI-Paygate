@@ -87,6 +87,41 @@ For rapid development, use the unified stack command which runs services on the 
     bun run stack
     ```
 
+## Testing
+
+We maintain a comprehensive test suite covering all layers of the stack, from unit tests for individual microservices to full end-to-end (E2E) integration tests.
+
+### End-to-End (E2E) Tests
+
+The E2E tests simulate a real client interaction:
+1.  Sending a request to the Gateway.
+2.  Receiving a `402 Payment Required` challenge.
+3.  Signing the challenge with an Ethereum wallet.
+4.  Resubmitting the request with the signature.
+5.  Verifying the successful AI response.
+
+**Run E2E Tests:**
+```bash
+bun run test:e2e
+```
+*This command automatically builds and starts the Go Gateway and Rust Verifier in the background before running the tests.*
+
+### Unit Tests
+
+**Gateway (Go):**
+Tests the HTTP handlers and routing logic.
+```bash
+cd gateway
+go test -v
+```
+
+**Verifier (Rust):**
+Tests the cryptographic verification logic and EIP-712 implementation.
+```bash
+cd verifier
+cargo test
+```
+
 ## API Reference
 
 ### Endpoints

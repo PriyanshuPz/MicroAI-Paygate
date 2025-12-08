@@ -38,6 +38,7 @@ Thumbs.db
 *.swo
 .rules
 .cursor 
+docs
 
 # Ignored Components
 agent/
