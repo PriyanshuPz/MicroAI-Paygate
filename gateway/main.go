@@ -66,6 +66,7 @@ func main() {
 	r.Run(":" + port)
 }
 
+//   - 500: Verifier or AI service failure (includes error details)
 func handleSummarize(c *gin.Context) {
 	signature := c.GetHeader("X-402-Signature")
 	nonce := c.GetHeader("X-402-Nonce")
@@ -134,6 +135,7 @@ func handleSummarize(c *gin.Context) {
 	c.JSON(200, gin.H{"result": summary})
 }
 
+// createPaymentContext constructs a PaymentContext prefilled with the recipient address (from RECIPIENT_ADDRESS or a fallback), the USDC token, amount "0.001", a newly generated UUID nonce, and chain ID 8453.
 func createPaymentContext() PaymentContext {
 	return PaymentContext{
 		Recipient: getRecipientAddress(),
@@ -144,6 +146,8 @@ func createPaymentContext() PaymentContext {
 	}
 }
 
+// getRecipientAddress retrieves the recipient address from the RECIPIENT_ADDRESS environment variable.
+// If RECIPIENT_ADDRESS is unset, it logs a warning and returns the default address "0x2cAF48b4BA1C58721a85dFADa5aC01C2DFa62219".
 func getRecipientAddress() string {
 	addr := os.Getenv("RECIPIENT_ADDRESS")
 	if addr == "" {
@@ -153,6 +157,9 @@ func getRecipientAddress() string {
 	return addr
 }
 
+// callOpenRouter sends the given text to the OpenRouter chat completions API requesting a two-sentence summary and returns the generated summary.
+//
+// It reads OPENROUTER_API_KEY for authorization and OPENROUTER_MODEL to select the model (defaults to "z-ai/glm-4.5-air:free" if unset). The function returns the summary string on success or a non-nil error if the HTTP request fails or the API response is not in the expected format.
 func getPaymentAmount() string {
 	amount := os.Getenv("PAYMENT_AMOUNT")
 	if amount == "" {
