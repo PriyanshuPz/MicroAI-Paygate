@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 )
 
@@ -64,6 +66,7 @@ func main() {
 	r.Run(":" + port)
 }
 
+// - 500: Verifier or AI service failure (includes error details)
 func handleSummarize(c *gin.Context) {
 	signature := c.GetHeader("X-402-Signature")
 	nonce := c.GetHeader("X-402-Nonce")
@@ -83,9 +86,9 @@ func handleSummarize(c *gin.Context) {
 	context := PaymentContext{
 		Recipient: getRecipientAddress(),
 		Token:     "USDC",
-		Amount:    "0.001",
+		Amount:    getPaymentAmount(),
 		Nonce:     nonce,
-		ChainID:   8453,
+		ChainID:   getChainID(),
 	}
 
 	verifyReq := VerifyRequest{
@@ -94,7 +97,11 @@ func handleSummarize(c *gin.Context) {
 	}
 
 	verifyBody, _ := json.Marshal(verifyReq)
-	resp, err := http.Post("http://127.0.0.1:3002/verify", "application/json", bytes.NewBuffer(verifyBody))
+	verifierURL := os.Getenv("VERIFIER_URL")
+	if verifierURL == "" {
+		verifierURL = "http://127.0.0.1:3002"
+	}
+	resp, err := http.Post(verifierURL+"/verify", "application/json", bytes.NewBuffer(verifyBody))
 	if err != nil {
 		c.JSON(500, gin.H{"error": "Verification service unavailable"})
 		return
@@ -102,7 +109,10 @@ func handleSummarize(c *gin.Context) {
 	defer resp.Body.Close()
 
 	var verifyResp VerifyResponse
-	json.NewDecoder(resp.Body).Decode(&verifyResp)
+	if err := json.NewDecoder(resp.Body).Decode(&verifyResp); err != nil {
+		c.JSON(500, gin.H{"error": "Failed to decode verification response"})
+		return
+	}
 
 	if !verifyResp.IsValid {
 		c.JSON(403, gin.H{"error": "Invalid Signature", "details": verifyResp.Error})
@@ -125,24 +135,57 @@ func handleSummarize(c *gin.Context) {
 	c.JSON(200, gin.H{"result": summary})
 }
 
+// createPaymentContext constructs a PaymentContext prefilled with the recipient address (from RECIPIENT_ADDRESS or a fallback), the USDC token, amount "0.001", a newly generated UUID nonce, and chain ID 8453.
 func createPaymentContext() PaymentContext {
-	// In a real app, generate a random nonce and store it
 	return PaymentContext{
 		Recipient: getRecipientAddress(),
 		Token:     "USDC",
-		Amount:    "0.001",
-		Nonce:     "9c311e31-eb30-420a-bced-c0d68bc89cea", // Static for MVP
-		ChainID:   8453,
+		Amount:    getPaymentAmount(),
+		Nonce:     uuid.New().String(),
+		ChainID:   getChainID(),
 	}
 }
 
+// getRecipientAddress retrieves the recipient address from the RECIPIENT_ADDRESS environment variable.
+// If RECIPIENT_ADDRESS is unset, it logs a warning and returns the default address "0x2cAF48b4BA1C58721a85dFADa5aC01C2DFa62219".
 func getRecipientAddress() string {
-	// Hardcoded for MVP or read from env
-	// This should match the one derived from private key in TS version
-	// For now, I'll use a placeholder or the one from the logs
-	return "0x2cAF48b4BA1C58721a85dFADa5aC01C2DFa62219"
+	addr := os.Getenv("RECIPIENT_ADDRESS")
+	if addr == "" {
+		log.Println("Warning: RECIPIENT_ADDRESS not set, using default")
+		return "0x2cAF48b4BA1C58721a85dFADa5aC01C2DFa62219"
+	}
+	return addr
 }
 
+// getPaymentAmount returns the payment amount from the PAYMENT_AMOUNT environment variable.
+// If unset, it defaults to "0.001".
+func getPaymentAmount() string {
+	amount := os.Getenv("PAYMENT_AMOUNT")
+	if amount == "" {
+		return "0.001"
+	}
+	return amount
+}
+
+// getChainID returns the blockchain chain ID from the CHAIN_ID environment variable.
+// If unset or invalid, it defaults to 8453 (Base).
+func getChainID() int {
+	chainIDStr := os.Getenv("CHAIN_ID")
+	if chainIDStr == "" {
+		return 8453
+	}
+	chainID, err := strconv.Atoi(chainIDStr)
+	if err != nil {
+		log.Printf("Warning: Invalid CHAIN_ID '%s', using default 8453", chainIDStr)
+		return 8453
+	}
+	return chainID
+}
+
+// callOpenRouter sends the given text to the OpenRouter chat completions API
+// requesting a two-sentence summary and returns the generated summary.
+// It reads OPENROUTER_API_KEY for authorization and OPENROUTER_MODEL to select
+// the model (defaults to "z-ai/glm-4.5-air:free" if unset).
 func callOpenRouter(text string) (string, error) {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	model := os.Getenv("OPENROUTER_MODEL")
@@ -171,15 +214,31 @@ func callOpenRouter(text string) (string, error) {
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if choices, ok := result["choices"].([]interface{}); ok && len(choices) > 0 {
-		choice := choices[0].(map[string]interface{})
-		message := choice["message"].(map[string]interface{})
-		return message["content"].(string), nil
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode AI response: %w", err)
 	}
 
-	return "", fmt.Errorf("invalid response from AI provider")
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return "", fmt.Errorf("invalid response from AI provider: no choices")
+	}
+
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid response from AI provider: malformed choice")
+	}
+
+	message, ok := choice["message"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid response from AI provider: malformed message")
+	}
+
+	content, ok := message["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("invalid response from AI provider: missing content")
+	}
+
+	return content, nil
 }
 
 func handleHealth(c *gin.Context) {
